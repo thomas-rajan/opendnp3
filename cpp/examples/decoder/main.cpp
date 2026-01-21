@@ -22,7 +22,9 @@
 #include <opendnp3/decoder/Decoder.h>
 #include <opendnp3/logging/LogLevels.h>
 
-#include <array>
+#include <iostream>
+#include <ostream>
+#include <string>
 
 using namespace opendnp3;
 
@@ -55,31 +57,41 @@ int main(int argc, char* argv[])
     IDecoderCallbacks callback;
     Decoder decoder(callback, logger);
 
-    std::array<uint8_t, 4096> rawBuffer;
-
     const Mode MODE = (argc > 1) ? GetMode(argv[1]) : Mode::Link;
 
-    while (true)
+    std::string input, line;
+    while (std::getline(std::cin, line))
     {
-        const size_t numRead = fread(rawBuffer.data(), 1, rawBuffer.size(), stdin);
+        // Append the line and a newline character to preserve the original formatting
+        input += line + "\n";
+    }
+    input.erase(std::remove_if(input.begin(), input.end(), [](unsigned char x) { return std::isspace(x); }),
+                input.end());
+    if (input.length() % 2 != 0)
+    {
+        std::cerr << "Input length should be a factor of 2" << std::endl;
+        return 1;
+    }
 
-        if (numRead == 0)
-        {
-            return 0;
-        }
+    std::vector<uint8_t> bytes;
+    for (auto it = input.begin(); it != input.end();)
+    {
+        auto abyte = std::string(it, it + 2);
+        bytes.push_back(std::stoi(abyte, nullptr, 16));
+        std::advance(it, 2);
+    }
 
-        switch (MODE)
-        {
-        case (Mode::Link):
-            decoder.DecodeLPDU(Buffer(rawBuffer.data(), numRead));
-            break;
-        case (Mode::Transport):
-            decoder.DecodeTPDU(Buffer(rawBuffer.data(), numRead));
-            break;
-        default:
-            decoder.DecodeAPDU(Buffer(rawBuffer.data(), numRead));
-            break;
-        }
+    switch (MODE)
+    {
+    case (Mode::Link):
+        decoder.DecodeLPDU(Buffer(bytes.data(), bytes.size()));
+        break;
+    case (Mode::Transport):
+        decoder.DecodeTPDU(Buffer(bytes.data(), bytes.size()));
+        break;
+    default:
+        decoder.DecodeAPDU(Buffer(bytes.data(), bytes.size()));
+        break;
     }
 
     return 0;
