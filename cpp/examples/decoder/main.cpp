@@ -25,6 +25,8 @@
 #include <iostream>
 #include <ostream>
 #include <string>
+#include <algorithm>
+#include <vector>
 
 using namespace opendnp3;
 
