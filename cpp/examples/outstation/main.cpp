@@ -29,18 +29,19 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace std;
 using namespace opendnp3;
 
-DatabaseConfig ConfigureDatabase()
+DatabaseConfig ConfigureDatabase(int point_count)
 {
-    DatabaseConfig config(10); // 10 of each type with default settings
+    DatabaseConfig config(point_count);
 
     config.analog_input[0].clazz = PointClass::Class2;
     config.analog_input[0].svariation = StaticAnalogVariation::Group30Var5;
     config.analog_input[0].evariation = EventAnalogVariation::Group32Var7;
-            
+
     return config;
 }
 
@@ -59,7 +60,13 @@ void AddUpdates(UpdateBuilder& builder, State& state, const std::string& argumen
 
 int main(int argc, char* argv[])
 {
-
+    if(argc != 4) {
+      std::cout << "missing arguments: ./app port start_address rtu_count";
+      return -1;
+    }
+    auto port = stoi(string(argv[1])); 
+    auto start_address = stoi(string(argv[2])); 
+    auto rtu_count = stoi(string(argv[3])); 
     // Specify what log levels to use. NORMAL is warning and above
     // You can add all the comms logging by uncommenting below.
     const auto logLevels = levels::NORMAL | levels::ALL_COMMS;
@@ -73,41 +80,55 @@ int main(int argc, char* argv[])
     auto channel = std::shared_ptr<IChannel>(nullptr);
     try
     {
-        channel = manager.AddTCPServer("server", logLevels, ServerAcceptMode::CloseExisting, IPEndpoint("0.0.0.0", 20000),
-                                       PrintingChannelListener::Create());
+        channel = manager.AddTCPServer("server", logLevels, ServerAcceptMode::CloseExisting,
+                                       IPEndpoint("0.0.0.0", port), PrintingChannelListener::Create());
     }
-    catch(const std::exception& e)
+    catch (const std::exception& e)
     {
         std::cerr << e.what() << '\n';
         return -1;
     }
+    auto point_count = 100;
+    vector<std::shared_ptr<IOutstation>> outstations;
+    for (auto i = start_address; i < start_address+rtu_count; i++)
+    {
+        // The main object for a outstation. The defaults are useable,
+        // but understanding the options are important.
+        OutstationStackConfig config(ConfigureDatabase(point_count));
 
-    // The main object for a outstation. The defaults are useable,
-    // but understanding the options are important.
-    OutstationStackConfig config(ConfigureDatabase());
+        // Specify the maximum size of the event buffers
+        config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(100);
 
-    // Specify the maximum size of the event buffers
-    config.outstation.eventBufferConfig = EventBufferConfig::AllTypes(100);
+        // you can override an default outstation parameters here
+        // in this example, we've enabled the oustation to use unsolicted reporting
+        // if the master enables it
+        config.outstation.params.allowUnsolicited = true;
 
-    // you can override an default outstation parameters here
-    // in this example, we've enabled the oustation to use unsolicted reporting
-    // if the master enables it
-    config.outstation.params.allowUnsolicited = true;
+        // You can override the default link layer settings here
+        // in this example we've changed the default link layer addressing
+        config.link.LocalAddr = i;
+        config.link.RemoteAddr = 1;
+        config.link.KeepAliveTimeout = TimeDuration::Max();
 
-    // You can override the default link layer settings here
-    // in this example we've changed the default link layer addressing
-    config.link.LocalAddr = 10;
-    config.link.RemoteAddr = 1;
-    config.link.KeepAliveTimeout = TimeDuration::Max();
+        // Create a new outstation with a log level, command handler, and
+        // config info this	returns a thread-safe interface used for
+        // updating the outstation's database.
+        auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(), app, config);
 
-    // Create a new outstation with a log level, command handler, and
-    // config info this	returns a thread-safe interface used for
-    // updating the outstation's database.
-    auto outstation = channel->AddOutstation("outstation", SuccessCommandHandler::Create(),
-                                             app, config);
-
-    // Enable the outstation and start communications
-    outstation->Enable();
+        // Enable the outstation and start communications
+        outstation->Enable();
+        UpdateBuilder builder;
+        for (auto j = 0; j < point_count; j++)
+        {
+            builder.Update(Counter(i), j, EventMode::Suppress);
+            builder.Update(Analog(i), j, EventMode::Suppress);
+            builder.Update(AnalogOutputStatus(i), j, EventMode::Suppress);
+            builder.Update(Binary(i % 2), j, EventMode::Suppress);
+            builder.Update(BinaryOutputStatus(i % 2), j, EventMode::Suppress);
+        }
+        outstation->Apply(builder.Build());
+        outstations.push_back(outstation);
+    }
 
     // variables used in example loop
     string input;
@@ -126,7 +147,7 @@ int main(int argc, char* argv[])
             // update measurement values based on input string
             UpdateBuilder builder;
             AddUpdates(builder, state, input);
-            outstation->Apply(builder.Build());
+            // outstation->Apply(builder.Build());
         }
     }
 
@@ -139,38 +160,32 @@ void AddUpdates(UpdateBuilder& builder, State& state, const std::string& argumen
     {
         switch (c)
         {
-        case ('c'):
-        {
+        case ('c'): {
             builder.Update(Counter(state.count), 0);
             ++state.count;
             break;
         }
-        case ('f'):
-        {
+        case ('f'): {
             builder.FreezeCounter(0, false);
             break;
         }
-        case ('a'):
-        {
+        case ('a'): {
             builder.Update(Analog(state.value), 0);
             state.value += 1;
             break;
         }
-        case ('b'):
-        {
+        case ('b'): {
             builder.Update(Binary(state.binary, Flags(0x01), app->Now()), 0);
             state.binary = !state.binary;
             break;
         }
-        case ('d'):
-        {
+        case ('d'): {
             builder.Update(DoubleBitBinary(state.dbit), 0);
             state.dbit
                 = (state.dbit == DoubleBit::DETERMINED_OFF) ? DoubleBit::DETERMINED_ON : DoubleBit::DETERMINED_OFF;
             break;
         }
-        case ('o'):
-        {
+        case ('o'): {
             OctetString value(Buffer(&state.octetStringValue, 1));
             builder.Update(value, 0);
             state.octetStringValue += 1;
